@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Advanced Space Shooter</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			min-height: 100vh;
+			background: linear-gradient(to bottom, #000000, #0a0a2e, #16213e);
+			font-family: 'Courier New', monospace;
+			overflow: hidden;
+		}
+
+		#gameContainer {
+			position: relative;
+			box-shadow: 0 0 50px rgba(0, 255, 255, 0.5);
+		}
+
+		canvas {
+			display: block;
+			background: #000;
+			border: 2px solid #0ff;
+		}
+
+		#ui {
+			position: absolute;
+			top: 0;
+			left: 0;
+			right: 0;
+			padding: 20px;
+			color: #0ff;
+			font-size: 18px;
+			pointer-events: none;
+			text-shadow: 0 0 10px #0ff;
+		}
+
+		#score {
+			float: left;
+		}
+
+		#health {
+			float: right;
+		}
+
+		#wave {
+			clear: both;
+			text-align: center;
+			margin-top: 10px;
+			font-size: 24px;
+			color: #ff0;
+		}
+
+		#gameOver, #startScreen {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			text-align: center;
+			color: #fff;
+			background: rgba(0, 0, 0, 0.9);
+			padding: 40px;
+			border: 3px solid #0ff;
+			border-radius: 10px;
+			display: none;
+		}
+
+		#startScreen {
+			display: block;
+		}
+
+		h1 {
+			color: #0ff;
+			font-size: 48px;
+			margin-bottom: 20px;
+			text-shadow: 0 0 20px #0ff;
+		}
+
+		button {
+			background: linear-gradient(to bottom, #0ff, #0aa);
+			border: none;
+			color: #000;
+			padding: 15px 40px;
+			font-size: 24px;
+			cursor: pointer;
+			margin: 10px;
+			font-family: 'Courier New', monospace;
+			font-weight: bold;
+			border-radius: 5px;
+			transition: all 0.3s;
+		}
+
+		button:hover {
+			background: linear-gradient(to bottom, #fff, #0ff);
+			transform: scale(1.1);
+			box-shadow: 0 0 20px #0ff;
+		}
+
+		.powerup-indicator {
+			position: absolute;
+			bottom: 20px;
+			left: 20px;
+			color: #ff0;
+			font-size: 16px;
+			text-shadow: 0 0 10px #ff0;
+		}
+
+		#controls {
+			color: #888;
+			font-size: 14px;
+			margin-top: 20px;
+		}
+	</style>
+</head>
+<body>
+	<div id="gameContainer">
+		<canvas id="gameCanvas" width="800" height="600"></canvas>
+		
+		<div id="ui">
+			<div id="score">Score: 0</div>
+			<div id="health">Health: 100</div>
+			<div id="wave"></div>
+			<div class="powerup-indicator" id="powerupIndicator"></div>
+		</div>
+
+		<div id="startScreen">
+			<h1>SPACE SHOOTER</h1>
+			<p style="color: #0ff; margin-bottom: 20px;">Defend the galaxy from alien invaders!</p>
+			<button onclick="startGame()">START GAME</button>
+			<div id="controls">
+				<p>CONTROLS:</p>
+				<p>ARROW KEYS or WASD - Move</p>
+				<p>SPACE - Shoot</p>
+				<p>Collect power-ups to upgrade your ship!</p>
+			</div>
+		</div>
+
+		<div id="gameOver">
+			<h1>GAME OVER</h1>
+			<p id="finalScore" style="font-size: 24px; color: #ff0; margin: 20px 0;"></p>
+			<button onclick="restartGame()">PLAY AGAIN</button>
+		</div>
+	</div>
+
+	<script>
+		const canvas = document.getElementById('gameCanvas');
+		const ctx = canvas.getContext('2d');
+
+		// Game state
+		let gameActive = false;
+		let score = 0;
+		let wave = 1;
+		let enemiesInWave = 5;
+		let enemiesDefeated = 0;
+
+		// Audio Context for sound effects
+		const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+		function playSound(frequency, duration, type = 'sine', volumeMultiplier = 0.3) {
+			if (!audioContext) return;
+			
+			const oscillator = audioContext.createOscillator();
+			const gainNode = audioContext.createGain();
+			
+			oscillator.connect(gainNode);
+			gainNode.connect(audioContext.destination);
+			
+			oscillator.frequency.value = frequency;
+			oscillator.type = type;
+			
+			gainNode.gain.setValueAtTime(volumeMultiplier * 0.3, audioContext.currentTime);
+			gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+			
+			oscillator.start(audioContext.currentTime);
+			oscillator.stop(audioContext.currentTime + duration);
+		}
+
+		// Player
+		const player = {
+			x: canvas.width / 2,
+			y: canvas.height - 100,
+			width: 40,
+			height: 40,
+			speed: 5,
+			health: 100,
+			maxHealth: 100,
+			bullets: [],
+			powerup: null,
+			powerupTimer: 0,
+			shield: false
+		};
+
+		// Input handling
+		const keys = {};
+		window.addEventListener('keydown', (e) => {
+			keys[e.key] = true;
+			if (e.key === ' ' && gameActive) {
+				e.preventDefault();
+				shoot();
+			}
+		});
+		window.addEventListener('keyup', (e) => keys[e.key] = false);
+
+		// Enemies
+		let enemies = [];
+		let particles = [];
+		let powerups = [];
+
+		class Particle {
+			constructor(x, y, color) {
+				this.x = x;
+				this.y = y;
+				this.vx = (Math.random() - 0.5) * 8;
+				this.vy = (Math.random() - 0.5) * 8;
+				this.life = 1;
+				this.color = color;
+				this.size = Math.random() * 3 + 2;
+			}
+
+			update() {
+				this.x += this.vx;
+				this.y += this.vy;
+				this.life -= 0.02;
+				this.vy += 0.1;
+			}
+
+			draw() {
+				ctx.save();
+				ctx.globalAlpha = this.life;
+				ctx.fillStyle = this.color;
+				ctx.fillRect(this.x, this.y, this.size, this.size);
+				ctx.restore();
+			}
+		}
+
+		class Enemy {
+			constructor(type = 'basic') {
+				this.type = type;
+				this.x = Math.random() * (canvas.width - 40);
+				this.y = -50;
+				this.width = 40;
+				this.height = 40;
+				this.bullets = [];
+				
+				if (type === 'basic') {
+					this.speed = 2 + Math.random();
+					this.health = 1;
+					this.points = 10;
+					this.color = '#f00';
+					this.shootTimer = 0;
+					this.shootInterval = 120;
+				} else if (type === 'fast') {
+					this.speed = 4 + Math.random() * 2;
+					this.health = 1;
+					this.points = 20;
+					this.color = '#ff0';
+					this.width = 30;
+					this.height = 30;
+					this.shootTimer = 0;
+					this.shootInterval = 90;
+				} else if (type === 'tank') {
+					this.speed = 1;
+					this.health = 5;
+					this.points = 50;
+					this.color = '#f0f';
+					this.width = 60;
+					this.height = 60;
+					this.shootTimer = 0;
+					this.shootInterval = 60;
+				} else if (type === 'boss') {
+					this.speed = 0.5;
+					this.health = 30;
+					this.points = 200;
+					this.color = '#f80';
+					this.width = 100;
+					this.height = 100;
+					this.shootTimer = 0;
+					this.shootInterval = 30;
+					this.vx = 2;
+				}
+				
+				this.maxHealth = this.health;
+			}
+
+			update() {
+				if (this.type === 'boss') {
+					this.x += this.vx;
+					if (this.x <= 0 || this.x >= canvas.width - this.width) {
+						this.vx *= -1;
+					}
+					if (this.y < 50) {
+						this.y += this.speed;
+					}
+				} else {
+					this.y += this.speed;
+				}
+
+				// Enemy shooting
+				this.shootTimer++;
+				if (this.shootTimer >= this.shootInterval && this.y > 0 && this.y < canvas.height - 100) {
+					this.shootTimer = 0;
+					this.bullets.push({
+						x: this.x + this.width / 2,
+						y: this.y + this.height,
+						width: 4,
+						height: 10,
+						speed: 4
+					});
+					playSound(150, 0.1, 'square', 0.1);
+				}
+
+				// Update bullets
+				this.bullets = this.bullets.filter(bullet => {
+					bullet.y += bullet.speed;
+					return bullet.y < canvas.height;
+				});
+			}
+
+			draw() {
+				// Enemy ship
+				ctx.save();
+				ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+				
+				// Create gradient
+				const gradient = ctx.createRadialGradient(0, 0, 5, 0, 0, this.width / 2);
+				gradient.addColorStop(0, this.color);
+				gradient.addColorStop(1, '#000');
+				
+				ctx.fillStyle = gradient;
+				ctx.beginPath();
+				ctx.moveTo(0, -this.height / 2);
+				ctx.lineTo(this.width / 2, this.height / 2);
+				ctx.lineTo(0, this.height / 3);
+				ctx.lineTo(-this.width / 2, this.height / 2);
+				ctx.closePath();
+				ctx.fill();
+				
+				// Glow effect
+				ctx.strokeStyle = this.color;
+				ctx.lineWidth = 2;
+				ctx.stroke();
+				
+				ctx.restore();
+
+				// Health bar for tanks and bosses
+				if (this.maxHealth > 1) {
+					const healthBarWidth = this.width;
+					const healthBarHeight = 5;
+					const healthPercent = this.health / this.maxHealth;
+					
+					ctx.fillStyle = '#f00';
+					ctx.fillRect(this.x, this.y - 10, healthBarWidth, healthBarHeight);
+					ctx.fillStyle = '#0f0';
+					ctx.fillRect(this.x, this.y - 10, healthBarWidth * healthPercent, healthBarHeight);
+				}
+
+				// Draw bullets
+				ctx.fillStyle = this.color;
+				this.bullets.forEach(bullet => {
+					ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+				});
+			}
+		}
+
+		class Powerup {
+			constructor(x, y) {
+				this.x = x;
+				this.y = y;
+				this.width = 30;
+				this.height = 30;
+				this.speed = 2;
+				this.rotation = 0;
+				
+				const types = ['rapidfire', 'shield', 'spread', 'health'];
+				this.type = types[Math.floor(Math.random() * types.length)];
+				
+				this.colors = {
+					rapidfire: '#0ff',
+					shield: '#00f',
+					spread: '#f0f',
+					health: '#0f0'
+				};
+			}
+
+			update() {
+				this.y += this.speed;
+				this.rotation += 0.05;
+			}
+
+			draw() {
+				ctx.save();
+				ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+				ctx.rotate(this.rotation);
+				
+				// Create glowing effect
+				ctx.shadowBlur = 20;
+				ctx.shadowColor = this.colors[this.type];
+				ctx.fillStyle = this.colors[this.type];
+				ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+				
+				ctx.restore();
+
+				// Draw icon
+				ctx.fillStyle = '#000';
+				ctx.font = 'bold 14px Arial';
+				ctx.textAlign = 'center';
+				ctx.textBaseline = 'middle';
+				const icons = {
+					rapidfire: 'R',
+					shield: 'S',
+					spread: 'T',
+					health: '+'
+				};
+				ctx.fillText(icons[this.type], this.x + this.width / 2, this.y + this.height / 2);
+			}
+		}
+
+		function drawPlayer() {
+			ctx.save();
+			ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+			
+			// Shield effect
+			if (player.shield) {
+				ctx.strokeStyle = 'rgba(0, 100, 255, 0.5)';
+				ctx.lineWidth = 3;
+				ctx.beginPath();
+				ctx.arc(0, 0, player.width / 2 + 10, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+			
+			// Ship body
+			const gradient = ctx.createLinearGradient(0, -player.height / 2, 0, player.height / 2);
+			gradient.addColorStop(0, '#0ff');
+			gradient.addColorStop(0.5, '#0aa');
+			gradient.addColorStop(1, '#066');
+			ctx.fillStyle = gradient;
+			
+			ctx.beginPath();
+			ctx.moveTo(0, -player.height / 2);
+			ctx.lineTo(player.width / 2, player.height / 2);
+			ctx.lineTo(player.width / 4, player.height / 4);
+			ctx.lineTo(-player.width / 4, player.height / 4);
+			ctx.lineTo(-player.width / 2, player.height / 2);
+			ctx.closePath();
+			ctx.fill();
+			
+			// Glow
+			ctx.strokeStyle = '#0ff';
+			ctx.lineWidth = 2;
+			ctx.stroke();
+			
+			// Engine glow
+			ctx.fillStyle = `rgba(0, 255, 255, ${0.5 + Math.random() * 0.5})`;
+			ctx.fillRect(-5, player.height / 4, 10, 15);
+			
+			ctx.restore();
+
+			// Draw bullets
+			ctx.fillStyle = '#0ff';
+			ctx.shadowBlur = 10;
+			ctx.shadowColor = '#0ff';
+			player.bullets.forEach(bullet => {
+				ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+			});
+			ctx.shadowBlur = 0;
+		}
+
+		function shoot() {
+			if (!gameActive) return;
+			
+			if (player.powerup === 'spread') {
+				player.bullets.push(
+					{ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 15, speed: 8, vx: -2 },
+					{ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 15, speed: 8, vx: 0 },
+					{ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 15, speed: 8, vx: 2 }
+				);
+			} else {
+				player.bullets.push({
+					x: player.x + player.width / 2 - 2,
+					y: player.y,
+					width: 4,
+					height: 15,
+					speed: 8,
+					vx: 0
+				});
+			}
+			
+			playSound(800, 0.1, 'square', 0.2);
+		}
+
+		let shootCooldown = 0;
+
+		function updatePlayer() {
+			// Movement
+			if ((keys['ArrowLeft'] || keys['a'] || keys['A']) && player.x > 0) {
+				player.x -= player.speed;
+			}
+			if ((keys['ArrowRight'] || keys['d'] || keys['D']) && player.x < canvas.width - player.width) {
+				player.x += player.speed;
+			}
+			if ((keys['ArrowUp'] || keys['w'] || keys['W']) && player.y > 0) {
+				player.y -= player.speed;
+			}
+			if ((keys['ArrowDown'] || keys['s'] || keys['S']) && player.y < canvas.height - player.height) {
+				player.y += player.speed;
+			}
+
+			// Auto-shoot for rapid fire
+			if (player.powerup === 'rapidfire') {
+				shootCooldown++;
+				if (shootCooldown >= 10) {
+					shoot();
+					shootCooldown = 0;
+				}
+			}
+
+			// Update bullets
+			player.bullets = player.bullets.filter(bullet => {
+				bullet.y -= bullet.speed;
+				if (bullet.vx) bullet.x += bullet.vx;
+				return bullet.y > -20;
+			});
+
+			// Update powerup timer
+			if (player.powerupTimer > 0) {
+				player.powerupTimer--;
+				if (player.powerupTimer === 0) {
+					player.powerup = null;
+					player.shield = false;
+					document.getElementById('powerupIndicator').textContent = '';
+				}
+			}
+		}
+
+		function spawnEnemy() {
+			const rand = Math.random();
+			let type = 'basic';
+			
+			if (wave >= 10 && enemies.length === 0 && Math.random() < 0.3) {
+				type = 'boss';
+			} else if (wave >= 5 && rand < 0.2) {
+				type = 'tank';
+			} else if (wave >= 3 && rand < 0.4) {
+				type = 'fast';
+			}
+			
+			enemies.push(new Enemy(type));
+		}
+
+		function checkCollisions() {
+			// Player bullets vs enemies
+			player.bullets.forEach((bullet, bulletIndex) => {
+				enemies.forEach((enemy, enemyIndex) => {
+					if (bullet.x < enemy.x + enemy.width &&
+						bullet.x + bullet.width > enemy.x &&
+						bullet.y < enemy.y + enemy.height &&
+						bullet.y + bullet.height > enemy.y) {
+						
+						enemy.health--;
+						player.bullets.splice(bulletIndex, 1);
+						
+						// Create particles
+						for (let i = 0; i < 5; i++) {
+							particles.push(new Particle(bullet.x, bullet.y, enemy.color));
+						}
+						
+						if (enemy.health <= 0) {
+							// Enemy destroyed
+							score += enemy.points;
+							enemiesDefeated++;
+							
+							// Create explosion
+							for (let i = 0; i < 20; i++) {
+								particles.push(new Particle(
+									enemy.x + enemy.width / 2,
+									enemy.y + enemy.height / 2,
+									enemy.color
+								));
+							}
+							
+							// Chance to drop powerup
+							if (Math.random() < 0.15) {
+								powerups.push(new Powerup(enemy.x, enemy.y));
+							}
+							
+							enemies.splice(enemyIndex, 1);
+							playSound(200, 0.2, 'sawtooth', 0.3);
+						} else {
+							playSound(300, 0.1, 'square', 0.2);
+						}
+					}
+				});
+			});
+
+			// Enemy bullets vs player
+			enemies.forEach(enemy => {
+				enemy.bullets.forEach((bullet, bulletIndex) => {
+					if (bullet.x < player.x + player.width &&
+						bullet.x + bullet.width > player.x &&
+						bullet.y < player.y + player.height &&
+						bullet.y + bullet.height > player.y) {
+						
+						if (!player.shield) {
+							player.health -= 10;
+							playSound(100, 0.3, 'sawtooth', 0.4);
+							
+							// Create particles
+							for (let i = 0; i < 10; i++) {
+								particles.push(new Particle(bullet.x, bullet.y, '#0ff'));
+							}
+						}
+						
+						enemy.bullets.splice(bulletIndex, 1);
+					}
+				});
+			});
+
+			// Player vs enemies (collision)
+			enemies.forEach((enemy, index) => {
+				if (player.x < enemy.x + enemy.width &&
+					player.x + player.width > enemy.x &&
+					player.y < enemy.y + enemy.height &&
+					player.y + player.height > enemy.y) {
+					
+					if (!player.shield) {
+						player.health -= 20;
+						playSound(100, 0.3, 'sawtooth', 0.5);
+					}
+					
+					enemies.splice(index, 1);
+					
+					// Create particles
+					for (let i = 0; i < 15; i++) {
+						particles.push(new Particle(enemy.x, enemy.y, enemy.color));
+					}
+				}
+			});
+
+			// Player vs powerups
+			powerups.forEach((powerup, index) => {
+				if (player.x < powerup.x + powerup.width &&
+					player.x + player.width > powerup.x &&
+					player.y < powerup.y + powerup.height &&
+					player.y + player.height > powerup.y) {
+					
+					if (powerup.type === 'health') {
+						player.health = Math.min(player.maxHealth, player.health + 30);
+					} else {
+						player.powerup = powerup.type;
+						player.powerupTimer = 600; // 10 seconds at 60fps
+						if (powerup.type === 'shield') {
+							player.shield = true;
+						}
+						
+						const powerupNames = {
+							rapidfire: 'RAPID FIRE',
+							shield: 'SHIELD',
+							spread: 'TRIPLE SHOT'
+						};
+						document.getElementById('powerupIndicator').textContent = 
+							powerupNames[powerup.type] + ': ' + Math.floor(player.powerupTimer / 60) + 's';
+					}
+					
+					powerups.splice(index, 1);
+					playSound(600, 0.2, 'sine', 0.3);
+				}
+			});
+
+			// Check game over
+			if (player.health <= 0) {
+				gameOver();
+			}
+		}
+
+		function drawStars() {
+			// Animated starfield
+			const time = Date.now() * 0.001;
+			for (let i = 0; i < 100; i++) {
+				const x = (i * 137.5) % canvas.width;
+				const y = ((i * 237.5 + time * 30 * (1 + i % 3)) % canvas.height);
+				const size = (i % 3) * 0.5 + 0.5;
+				
+				ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + (i % 3) * 0.2})`;
+				ctx.fillRect(x, y, size, size);
+			}
+		}
+
+		function updateGame() {
+			if (!gameActive) return;
+
+			ctx.fillStyle = '#000';
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+			drawStars();
+			
+			updatePlayer();
+			drawPlayer();
+
+			// Update and draw enemies
+			enemies.forEach(enemy => {
+				enemy.update();
+				enemy.draw();
+			});
+
+			// Update and draw powerups
+			powerups = powerups.filter(powerup => {
+				powerup.update();
+				powerup.draw();
+				return powerup.y < canvas.height;
+			});
+
+			// Update and draw particles
+			particles = particles.filter(particle => {
+				particle.update();
+				particle.draw();
+				return particle.life > 0;
+			});
+
+			checkCollisions();
+
+			// Remove off-screen enemies
+			enemies = enemies.filter(enemy => enemy.y < canvas.height + 50);
+
+			// Spawn enemies
+			if (Math.random() < 0.02 + wave * 0.003) {
+				if (enemies.length < 10) {
+					spawnEnemy();
+				}
+			}
+
+			// Check for wave completion
+			if (enemiesDefeated >= enemiesInWave) {
+				wave++;
+				enemiesDefeated = 0;
+				enemiesInWave += 3;
+				
+				// Wave completion bonus
+				score += wave * 50;
+				player.health = Math.min(player.maxHealth, player.health + 20);
+				
+				document.getElementById('wave').textContent = `WAVE ${wave}`;
+				setTimeout(() => {
+					document.getElementById('wave').textContent = '';
+				}, 2000);
+			}
+
+			// Update UI
+			document.getElementById('score').textContent = `Score: ${score}`;
+			document.getElementById('health').textContent = `Health: ${Math.max(0, player.health)}`;
+			
+			if (player.powerupTimer > 0 && player.powerup !== 'shield') {
+				const powerupNames = {
+					rapidfire: 'RAPID FIRE',
+					spread: 'TRIPLE SHOT'
+				};
+				document.getElementById('powerupIndicator').textContent = 
+					powerupNames[player.powerup] + ': ' + Math.floor(player.powerupTimer / 60) + 's';
+			} else if (player.shield) {
+				document.getElementById('powerupIndicator').textContent = 
+					'SHIELD: ' + Math.floor(player.powerupTimer / 60) + 's';
+			}
+
+			requestAnimationFrame(updateGame);
+		}
+
+		function startGame() {
+			document.getElementById('startScreen').style.display = 'none';
+			gameActive = true;
+			score = 0;
+			wave = 1;
+			enemiesInWave = 5;
+			enemiesDefeated = 0;
+			
+			player.x = canvas.width / 2;
+			player.y = canvas.height - 100;
+			player.health = 100;
+			player.bullets = [];
+			player.powerup = null;
+			player.powerupTimer = 0;
+			player.shield = false;
+			
+			enemies = [];
+			particles = [];
+			powerups = [];
+			
+			updateGame();
+		}
+
+		function gameOver() {
+			gameActive = false;
+			document.getElementById('finalScore').textContent = `Final Score: ${score}`;
+			document.getElementById('gameOver').style.display = 'block';
+			playSound(50, 1, 'sawtooth', 0.5);
+		}
+
+		function restartGame() {
+			document.getElementById('gameOver').style.display = 'none';
+			startGame();
+		}
+
+		// Initial draw
+		ctx.fillStyle = '#000';
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		drawStars();
+	</script>
+</body>
+</html>
