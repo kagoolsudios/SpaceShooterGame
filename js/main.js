@@ -537,9 +537,9 @@ const nebulas = [
 					player.shield = false;
 					player.powerup = null;
 				}
-				return;
+				return true;
 			}
-			if (player.invulnerabilityTimer > 0) return;
+			if (player.invulnerabilityTimer > 0) return false;
 
 			player.health -= amount;
 			player.invulnerabilityTimer = GAME_CONFIG.playerInvulnerability;
@@ -551,6 +551,8 @@ const nebulas = [
 				player.health = 0;
 				gameOver();
 			}
+
+			return true;
 		}
 
 		function applyPowerup(powerupType) {
@@ -738,7 +740,8 @@ const nebulas = [
 				if (!intersects(enemy, player)) continue;
 
 				if (enemy.type === 'boss') {
-					applyPlayerDamage(22);
+					const playerWasHit = applyPlayerDamage(22);
+					if (!playerWasHit) continue;
 					enemy.health -= 3;
 					addScreenShake(11, 0.2);
 					if (enemy.health <= 0) {
